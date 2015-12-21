@@ -118,13 +118,13 @@ class ModelMetaclass(type):
 	'''
 	Metaclass,用于建立模型类和数据库字段类型的映射
 	'''
-
+	#这里的name表示metaclass要生成的类的名字，代表一个实体或者模型
 	def __new__(cls,name,bases,attrs):
-
 		#子类和父类Model都会调用metaclass，如果是Model调用的，则忽略以下步骤
 		if name=='Model':
 			return type.__new__(cls,name,bases,attrs)
 
+		#保存元类创建的子类（实体类）
 		if not hasattr(cls,'subclasses'):
 			cls.subclasses={}
 		if not name in cls.subclasses:
@@ -135,41 +135,57 @@ class ModelMetaclass(type):
 		
 		logging.info('Scan ORMaping %s...' % name);
 		mappings=dict()
-		primart_key=None
+		primary_key=None
+		
+		#例如id=IntegerField（name='id'）
 		for k,v in attrs.iteritems():
 			if isinstance(v,Field):
 				if not v.name:
 					v.name=k
 				logging.info('Found mapping:%s=>%s' % (k,v))
 
+				#该字段是主键
 				if v.primary_key:
 					if primary_key:
 						raise TypeError('Cannot define more than 1 primary key in class:%s' % name)
 					if v.updatable:
 						logging.warning('NOTE:change primary key to non-updatable.')
+						v.updatable=False
+
 					if v.nullable:
 						logging.warning('NOTE:change primary key to not-nullable.')
-					primary_key=v
-				mappings[k]=v
+						v.nullable=False
+
+					primary_key=v#记录主键
+				mappings[k]=v #记录一对映射
+		
+		#没有主键
 		if not primary_key:
 			raise TypeError('Primary key not defined in class %s.' % name)
 		for k in mappings.iterkeys():
 			attrs.pop(k)
+
+		#模型所对应的数据库表名就是模型名（类名比如Users）的小写
 		if not '__table__' in attrs:
 			attrs['__table__']=name.lower()
 		attrs['__mappings__']=mappings
 		attrs['__primary_key__']=primary_key
+
+		#一个模型对应的sql说明
 		attrs['__sql__']=lambda self:_gen_sql(attrs['__table__'],mappings)
-		for trigger in _trigger:
+		for trigger in _triggers:
 			if not trigger in attrs:
 				attrs[trigger]=None
 		return type.__new__(cls,name,bases,attrs)
 
 class Model(dict):
-	__metaclasd__=ModelMetaclass
+	__metaclass__=ModelMetaclass
 	
+	#根据初始化的参数生成字典	
 	def __init__(self,**kw):
 		super(Model,self).__init__(**kw)
+
+	#getter和setter
 	def __getattr__(self,key):
 		try:
 			return self[key]
@@ -178,6 +194,7 @@ class Model(dict):
 	def __setattr__(self,key,value):
 		self[key]=value
 
+	#类方法，注意有cls
 	@classmethod
 	def get(cls,pk):
 		'''
@@ -188,21 +205,26 @@ class Model(dict):
 
 	@classmethod
 	def find_first(cls,where,*args):
-		d=db.select_one(r'select * from %s %s' % (cls.__table__,where),*args)
-		return cls(**d) id d else None
+		d=db.select_one('select * from %s %s' % (cls.__table__,where),*args)
+		return cls(**d) if d else None
 
 	@classmethod
 	def find_all(cls,*args):
+		'''
+		print 'enter find_all()...'
+		print 'cls:',cls
+		print 'table:',cls.__table__
+		'''
 		L=db.select('select * from %s' % cls.__table__)
 		return [cls(**d) for d in L]
 
 	@classmethod
-	def fing_by(cls,where,*args):
+	def find_by(cls,where,*args):
 		L=db.select('select * from %s %s' % (cls.__table__,where),*args)
 		return [cls(**d) for d in L]
 
 	@classmethod
-	def couny_all(cls):
+	def count_all(cls):
 		return db.select_int('select count(\'%s\') from %s' % (cls.__primary_key__.name,cls.__table__))
 		
 
@@ -214,25 +236,29 @@ class Model(dict):
 		self.pre_update and self.pre_update()
 		L=[]
 		args=[]
-		for k,v in self.__mappings__.iteritems(():
-			if v.updatable:
-				if hasattr(self,k);
+		for k,v in self.__mappings__.iteritems():#遍历所有的字段
+			if v.updatable:#寻找可更新的字段
+
+				#从当前类（是一个字典）取出value
+				if hasattr(self,k):
 					args=getattr(self,k)
 				else:
-					arg=v.default
+					arg=v.default#不存在时则设置为默认值
 					setattr(self,k,arg)
 				L.append('%s=?' % k)
 				args.append(arg)
 		pk=self.__primary_key__.name
-		args.append(getattr(self,pk))
+		args.append(getattr(self,pk))#找到主键的值用在where %s=%s后面
 		db.update('update %s set %s where %s=?' % (self.__table__,','.join(L),pk),*args)
 		return self
 
 	def delete(self):
+		print 'enter delete()...'
 		self.pre_delete and self.pre_delete()
+		print '...'
 		pk=self.__primary_key__
 		args=(getattr(self,pk),)
-		db.update('delete from %s where %s=?' % (self.__table__,pk),×args)
+		db.update('delete from %s where %s=?' % (self.__table__,pk),*args)
 		return self
 
 	def insert(self):
@@ -241,7 +267,7 @@ class Model(dict):
 		for k,v in self.__mappings__.iteritems():
 			if not hasattr(self,k):
 				setattr(self,k,v.default)
-			params[v.name]=getattr((self,k)
+			params[v.name]=getattr(self,k)
 		db.insert('%s' % self.__table__,**params)
 		return self
 
